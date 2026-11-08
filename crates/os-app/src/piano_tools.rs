@@ -40,6 +40,19 @@ pub enum NCmd {
     /// The magnet button's menus (spec: ui/piano-snap.md): the snap setting, a stock length for new notes.
     Snap(crate::snap::EditorSnap),
     StockLength(crate::playlist::Snap),
+    /// The scale and chord helpers (the toolbar's Blend button, `crate::piano_scale`): the key, the scale to highlight,
+    /// a chord to insert at the play start, and fitting the notes to the scale.
+    SetRoot(u8),
+    SetScale(Option<u8>),
+    InsertChord(u8),
+    FitScale,
+    /// What a click in the grid stamps (a chord or a scale) and whether its notes are spread one step apart.
+    StampChord(Option<u8>),
+    StampScale(Option<u8>),
+    StampDiagonal(bool),
+    /// Select the channel's notes whose pitch is in the highlighted scale or the chord set to stamp.
+    SelectScale,
+    SelectChord,
     /// Make a channel rack row the piano roll's channel (the title's channel menu).
     Target(usize),
 }
@@ -346,6 +359,57 @@ pub fn run(app: &mut App, cmd: NCmd) -> Option<String> {
         }
         NCmd::Snap(p) => return Some(crate::piano_snap::set(s, p)),
         NCmd::StockLength(sn) => return Some(crate::piano_snap::set_length(s, sn)),
+        NCmd::SetRoot(root) => {
+            s.piano.key_root = root % 12;
+            return Some(format!("Piano roll: key {}", crate::piano_scale::ROOTS[usize::from(s.piano.key_root)]));
+        }
+        NCmd::SetScale(scale) => {
+            s.piano.scale = scale.filter(|&i| usize::from(i) < crate::piano_scale::SCALE_COUNT);
+            return Some(match s.piano.scale {
+                Some(i) => format!("Piano roll: {} scale highlighted", crate::piano_scale::scale_label(usize::from(i))),
+                None => "Piano roll: scale highlighting off".into(),
+            });
+        }
+        NCmd::InsertChord(k) => return Some(crate::piano_scale::insert_chord(s, usize::from(k))),
+        NCmd::FitScale => {
+            if s.piano.scale.is_none() {
+                return Some("Piano roll: choose a scale first".into());
+            }
+            done(crate::piano_scale::fit(s), "fitted to the scale")
+        }
+        NCmd::StampChord(k) => {
+            s.piano.stamp = k.map(crate::piano_scale::Stamp::Chord);
+            if s.piano.stamp.is_some() {
+                s.piano.tool = crate::piano::Tool::Draw;
+            }
+            return Some(match s.piano.stamp {
+                Some(stamp) => format!("Piano roll: clicking stamps {}", stamp.label()),
+                None => "Piano roll: mouse stamp off".into(),
+            });
+        }
+        NCmd::StampScale(i) => {
+            s.piano.stamp = i.map(crate::piano_scale::Stamp::Scale);
+            if let Some(i) = i {
+                s.piano.scale = Some(i);
+                s.piano.tool = crate::piano::Tool::Draw;
+            }
+            return Some(match s.piano.stamp {
+                Some(stamp) => format!("Piano roll: clicking stamps {} (scale highlighted)", stamp.label()),
+                None => "Piano roll: mouse stamp off".into(),
+            });
+        }
+        NCmd::StampDiagonal(on) => {
+            s.piano.stamp_diagonal = on;
+            return Some(format!("Piano roll: stamps {}", if on { "one grid step apart (diagonal)" } else { "stacked at the click" }));
+        }
+        NCmd::SelectScale => {
+            let n = crate::piano_scale::select_scale(s);
+            return Some(format!("Piano roll: selected {n} note{} of the scale", if n == 1 { "" } else { "s" }));
+        }
+        NCmd::SelectChord => {
+            let n = crate::piano_scale::select_chord(s);
+            return Some(format!("Piano roll: selected {n} note{} of the chord", if n == 1 { "" } else { "s" }));
+        }
         NCmd::Target(row) => {
             if row >= s.project.channels.len() {
                 return None;

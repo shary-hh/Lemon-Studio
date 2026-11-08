@@ -287,6 +287,9 @@ pub enum Action {
     PianoToolsMenu,
     /// Toolbar magnet: the Snap menu; right-click: Stock note lengths (spec: ui/piano-snap.md §1).
     PianoSnapMenu,
+    /// Toolbar "Scale and chord helpers" button: the key, the scale to highlight and the chords to insert
+    /// (`crate::piano_scale`).
+    PianoHelpersMenu,
     /// The channel name in the title: the channel menu; right-click: channel settings; wheel: channels with notes
     /// (spec: ui/piano-target-channel.md).
     PianoTarget,
@@ -8422,6 +8425,30 @@ impl App {
             self.damage_piano();
             return;
         }
+        // The scale and chord helpers' stamp: a click writes the chosen chord or scale at the clicked key (one grid
+        // step apart while diagonal, which is the default) and selects it, so a drag moves the whole group.
+        if matches!(a, Action::PianoGrid) && tool == Tool::Draw && let Some(stamp) = self.state.piano.stamp {
+            let start = crate::piano_snap::place(&self.state, &g, g.tick_at(x), self.alt);
+            let key = g.key_at(y).clamp(0, views::piano::TOP_KEY);
+            let (orig, first) = {
+                let s = &mut self.state;
+                let added = crate::piano_scale::stamp(s, stamp, start, key);
+                let notes = piano::notes(s);
+                (added.iter().filter_map(|&i| notes.get(i).map(|&n| (i, n))).collect::<Vec<_>>(), added.first().and_then(|&i| notes.get(i).copied()))
+            };
+            if orig.is_empty() {
+                self.state.message = Some("Piano roll: nothing to stamp here".into());
+                return;
+            }
+            self.drag = Some(Drag::NoteMove { x0: x, y0: y, orig });
+            if let Some(n) = first {
+                self.key_velocity = n.velocity;
+                let play = self.audition();
+                self.hold_key(Some(i32::from(n.key)), play);
+            }
+            self.damage_piano();
+            return;
+        }
         if matches!(a, Action::PianoGrid | Action::PianoNote(_)) && tool != Tool::Draw {
             let s = &mut self.state;
             let note = if let Action::PianoNote(i) = *a { Some(i) } else { None };
@@ -9018,6 +9045,11 @@ impl App {
                 // Top-left 11 px left of and below the button's centre (spec: ui/piano-snap.md §1).
                 let b = self.hits.iter().rev().find(|h| h.action == Action::PianoSnapMenu).map_or(Rect::new(self.mouse.0, self.mouse.1, 0.0, 0.0), |h| h.rect);
                 s.playlist.popup = Some(crate::piano_snap::snap_menu(s, b.cx() - 11.0, b.cy() + 11.0));
+            }
+            // The scale and chord helpers: the key, the scale to highlight and the chords to insert at the play start.
+            Action::PianoHelpersMenu => {
+                let b = self.hits.iter().rev().find(|h| h.action == Action::PianoHelpersMenu).map_or(Rect::new(self.mouse.0, self.mouse.1, 0.0, 0.0), |h| h.rect);
+                s.playlist.popup = Some(crate::piano_scale::tools_menu(s, b.x - 6.0, b.bottom() + 2.0));
             }
             Action::PitchStep(dir) => {
                 s.piano.pitch_center = piano::clamp_pitch_center(s.piano.pitch_center + dir * piano::PITCH_STEP);

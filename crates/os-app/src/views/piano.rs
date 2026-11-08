@@ -129,6 +129,9 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     let pat = s.project.patterns.iter().find(|p| p.number == s.pattern);
     let notes: &[Note] = pat.map_or(&[], |p| &p.notes);
     let sel = s.piano.selection(s.pattern, ch);
+    // The scale the helpers highlight, if one is on (`crate::piano_scale`), and its root on the keyboard.
+    let pcs = crate::piano_scale::scale_classes(s);
+    let root = crate::piano_scale::root_class(s);
     // Only a ruler time selection shades the grid, and only its columns (§10).
     let range = s.piano.range.map(|(a, b)| (g.x_of(a as f32), g.x_of(b as f32)));
 
@@ -161,11 +164,15 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     lit.extend(s.piano.typed.iter().filter(|&&(c, _)| Some(c) == ch).map(|&(_, k)| k));
     lit.extend(f.sounding.iter().filter(|&&(c, _)| Some(c) == ch).map(|&(_, k)| i32::from(k)));
     ui.live(Live::Sounding, l.keys);
-    keyboard(ui, &l, &g, &lit);
-    grid(ui, &l, &g, range);
+    keyboard(ui, &l, &g, &lit, pcs, root);
+    grid(ui, &l, &g, range, pcs, root);
 
     // Notes: ghosts of the other channels first (when shown, Alt+V), then this channel's (§5).
-    ui.hit(l.grid, Action::PianoGrid, "Piano roll: click to add a note, drag a note to move it or its end to resize, right-click to delete");
+    let hint = match s.piano.stamp {
+        Some(stamp) => format!("Piano roll: click to stamp {} ({}); drag to move it", stamp.label(), if s.piano.stamp_diagonal { "diagonal" } else { "stacked" }),
+        None => "Piano roll: click to add a note, drag a note to move it or its end to resize, right-click to delete".into(),
+    };
+    ui.hit(l.grid, Action::PianoGrid, hint);
     ui.c.push_clip(l.grid);
     let ghost = t.text_faint.with_alpha(110);
     for n in notes.iter().filter(|n| s.piano.ghosts && Some(n.channel) != ch) {
@@ -352,7 +359,7 @@ fn toolbar(ui: &mut Ui, s: &State, r: Rect, shift: f32) {
         (242.0, Icon::MidiControl, "Piano roll tools: quantize, chop, glue, strum, arpeggiate, randomize...", Some(Action::PianoToolsMenu)),
         (263.0, Icon::Magnet, "", Some(Action::PianoSnapMenu)),
         (283.0, Icon::Note, "Note properties", None),
-        (305.0, Icon::Blend, "Scale and chord helpers", None),
+        (305.0, Icon::Blend, "Scale and chord helpers: highlight a scale, insert chords, fit notes to the scale", Some(Action::PianoHelpersMenu)),
         (327.0, Icon::Undo, "Undo (Ctrl+Z)", Some(Action::PianoUndo)),
         (360.0, Icon::Pencil, "Draw (P)", Some(Action::PianoTool(Tool::Draw))),
         (380.0, Icon::Brush, "Paint (B): drag to paint notes along the row", Some(Action::PianoTool(Tool::Paint))),
@@ -371,7 +378,7 @@ fn toolbar(ui: &mut Ui, s: &State, r: Rect, shift: f32) {
             icons::draw(ui.c, icon, b, t.text_faint);
             continue;
         };
-        let on = action == Action::PianoTool(active);
+        let on = action == Action::PianoTool(active) || (action == Action::PianoHelpersMenu && s.piano.stamp.is_some());
         // The magnet's hint names the current snap (spec: ui/piano-snap.md §8).
         let hint: std::borrow::Cow<'static, str> = if action == Action::PianoSnapMenu { crate::piano_snap::hint(s).into() } else { hint.into() };
         let hov = ui.hit(b, action, hint);
@@ -474,7 +481,7 @@ fn ruler(ui: &mut Ui, l: &Layout, g: &Geom, range: Option<(f32, f32)>, marker: u
     ui.c.pop_clip();
 }
 
-fn keyboard(ui: &mut Ui, l: &Layout, g: &Geom, lit: &[i32]) {
+fn keyboard(ui: &mut Ui, l: &Layout, g: &Geom, lit: &[i32], pcs: Option<[bool; 12]>, root: Option<u8>) {
     let t = ui.t;
     let k = l.keys;
     ui.hit(k, Action::PianoKeys, "Keyboard");
@@ -526,10 +533,41 @@ fn keyboard(ui: &mut Ui, l: &Layout, g: &Geom, lit: &[i32]) {
             _ => {}
         }
     }
+    // The chosen scale's white keys: a soft tint, stronger on the root, with a solid bar at its right end (lit keys
+    // keep their own colour).
+    if pcs.is_some() || root.is_some() {
+        for key in lo..=hi {
+            if is_black(key) || lit.contains(&key) {
+                continue;
+            }
+            let pc = key.rem_euclid(12);
+            let in_scale = pcs.is_some_and(|p| p[pc as usize]);
+            let is_root = root == Some(pc as u8);
+            if !in_scale && !is_root {
+                continue;
+            }
+            let y = g.y_of(key);
+            ui.c.fill_rect(Rect::new(k.x, y, k.w - 1.0, row - 1.0), t.pill.with_alpha(if is_root { 84 } else { 34 }));
+            if is_root {
+                ui.c.fill_rect(Rect::new(k.right() - 5.0, y + 1.0, 3.0, row - 3.0), t.pill);
+            }
+        }
+    }
     for key in lo..=hi {
         if is_black(key) {
             let y = g.y_of(key);
-            let (left, right) = if lit.contains(&key) { (t.key_black_lit_left, t.key_black_lit) } else { (t.key_black_left, t.key_black) };
+            let pc = key.rem_euclid(12);
+            let in_scale = pcs.is_some_and(|p| p[pc as usize]);
+            let is_root = root == Some(pc as u8);
+            let (left, right) = if lit.contains(&key) {
+                (t.key_black_lit_left, t.key_black_lit)
+            } else if is_root {
+                (t.key_black_left.mix(t.pill, 0.7), t.key_black.mix(t.pill, 0.7))
+            } else if in_scale {
+                (t.key_black_left.mix(t.pill, 0.4), t.key_black.mix(t.pill, 0.4))
+            } else {
+                (t.key_black_left, t.key_black)
+            };
             if lemon {
                 // Rounded at the playing end; the left end runs under the clip.
                 ui.c.fill_rrect(Rect::new(k.x - 6.0, y, 51.0, row), 3.0f32.min(row / 2.0), right);
@@ -578,18 +616,19 @@ fn columns(ui: &mut Ui, g: &Geom, area: Rect, bands: &[(f32, f32, Color)], bar: 
     }
 }
 
-fn grid(ui: &mut Ui, l: &Layout, g: &Geom, range: Option<(f32, f32)>) {
-    grid_rows(ui, l, g, l.grid, false);
+fn grid(ui: &mut Ui, l: &Layout, g: &Geom, range: Option<(f32, f32)>, pcs: Option<[bool; 12]>, root: Option<u8>) {
+    grid_rows(ui, l, g, l.grid, pcs, root, false);
     if let Some((x0, x1)) = range {
         let r = Rect::span(x0, x1, l.grid.y, l.grid.bottom()).intersect(&l.grid);
         if r.w > 0.0 {
-            grid_rows(ui, l, g, r, true);
+            grid_rows(ui, l, g, r, pcs, root, true);
         }
     }
 }
 
-/// The note-grid rows and columns, clipped to `clip` (`selecting` = the red time-selection tint).
-fn grid_rows(ui: &mut Ui, l: &Layout, g: &Geom, clip: Rect, selecting: bool) {
+/// The note-grid rows and columns, clipped to `clip` (`selecting` = the red time-selection tint); rows of the
+/// highlighted scale are tinted toward the theme's accent, the root's stronger and with a bar at the grid's edge.
+fn grid_rows(ui: &mut Ui, l: &Layout, g: &Geom, clip: Rect, pcs: Option<[bool; 12]>, root: Option<u8>, selecting: bool) {
     let t = ui.t;
     let gr = l.grid;
     let (white, black) = if selecting { (t.pr_row_sel, t.pr_row_black_sel) } else { (t.pr_row, t.pr_row_black) };
@@ -599,7 +638,19 @@ fn grid_rows(ui: &mut Ui, l: &Layout, g: &Geom, clip: Rect, selecting: bool) {
     for key in lo..=hi {
         let y = g.y_of(key);
         let fill = if is_black(key) { black } else { white };
+        let is_root = root == Some(key.rem_euclid(12) as u8);
+        let fill = if is_root {
+            fill.mix(t.pill, 0.22)
+        } else if pcs.is_some_and(|p| p[key.rem_euclid(12) as usize]) {
+            fill.mix(t.pill, if selecting { 0.12 } else { 0.10 })
+        } else {
+            fill
+        };
         ui.c.fill_rect(Rect::new(gr.x, y, gr.w, g.row - 1.0), fill);
+        if is_root {
+            // The root: a bar along the grid's left edge.
+            ui.c.fill_rect(Rect::new(gr.x, y, 2.0, g.row - 1.0), t.pill);
+        }
         ui.c.fill_rect(Rect::new(gr.x, y + g.row - 1.0, gr.w, 1.0), sub(t, white, 0x0a));
         bands.push((y, g.row - 1.0, fill));
     }

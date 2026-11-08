@@ -115,6 +115,14 @@ pub struct PianoState {
     pub was_shown: Option<bool>,
     /// The magnet button's setting (spec: ui/piano-snap.md): a program setting, kept in the user folder (crate::snap).
     pub snap: crate::snap::EditorSnap,
+    /// The key (0 = C) and the highlighted scale (an index into `piano_scale`'s scale list; `None` = off) of the
+    /// toolbar's scale and chord helpers.
+    pub key_root: u8,
+    pub scale: Option<u8>,
+    /// What a click in the grid stamps (`piano_scale`: a chord or a scale), and whether its notes are spread one grid
+    /// step apart as a diagonal run (`true`) or stacked at the click (`false`).
+    pub stamp: Option<crate::piano_scale::Stamp>,
+    pub stamp_diagonal: bool,
     sel: Vec<usize>,
     sel_key: (u16, u16),
 }
@@ -147,6 +155,10 @@ impl Default for PianoState {
             split_click: None,
             was_shown: None,
             snap: crate::snap::EditorSnap::default(),
+            key_root: 0,
+            scale: None,
+            stamp: None,
+            stamp_diagonal: true,
             sel: Vec::new(),
             sel_key: (0, 0),
         }
@@ -175,7 +187,7 @@ impl PianoState {
 
     /// Forget everything tied to the previous project.
     pub fn reset(&mut self) {
-        *self = PianoState { px_per_beat: self.px_per_beat, row_h: self.row_h, ghosts: self.ghosts, tool: self.tool, rng: self.rng, split: self.split, snap: self.snap, ..PianoState::default() };
+        *self = PianoState { px_per_beat: self.px_per_beat, row_h: self.row_h, ghosts: self.ghosts, tool: self.tool, rng: self.rng, split: self.split, snap: self.snap, key_root: self.key_root, scale: self.scale, stamp: self.stamp, stamp_diagonal: self.stamp_diagonal, ..PianoState::default() };
     }
 }
 

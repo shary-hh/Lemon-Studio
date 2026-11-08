@@ -97,6 +97,7 @@ mod monitor;
 mod motion;
 mod params;
 mod piano;
+mod piano_scale;
 mod piano_snap;
 mod piano_split;
 mod piano_tools;
